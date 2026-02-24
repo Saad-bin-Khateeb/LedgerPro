@@ -4,6 +4,7 @@ const helmet = require("helmet");
 const compression = require("compression");
 const morgan = require("morgan");
 const rateLimit = require("express-rate-limit");
+const mongoose = require("mongoose"); // ✅ ADD THIS - IT WAS MISSING!
 
 const connectDB = require("./config/db");
 const logger = require("./utils/logger");
@@ -81,12 +82,24 @@ app.use((req, res, next) => {
 // HEALTH CHECK
 // ====================
 app.get("/health", (req, res) => {
+  const dbState = mongoose.connection.readyState;
+  const states = {
+    0: "disconnected",
+    1: "connected",
+    2: "connecting",
+    3: "disconnecting"
+  };
+  
   res.json({
     status: "OK",
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
     environment: process.env.NODE_ENV,
-    database: mongoose.connection.readyState === 1 ? "connected" : "disconnected"
+    database: {
+      state: states[dbState] || "unknown",
+      connected: dbState === 1,
+      name: mongoose.connection.name || null
+    }
   });
 });
 
