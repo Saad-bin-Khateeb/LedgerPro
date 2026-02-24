@@ -12,41 +12,68 @@ process.on("uncaughtException", (err) => {
   process.exit(1);
 });
 
-const PORT = process.env.PORT || 5000;
-
-const server = app.listen(PORT, () => {
-  console.log(`
-  ======================================
-  🚀 Server is running on port ${PORT}
-  📝 Environment: ${process.env.NODE_ENV || "development"}
-  🔗 URL: http://localhost:${PORT}
-  ======================================
-  `);
+// Connect to MongoDB (important for serverless)
+let isConnected = false;
+const connectDB = async () => {
+  if (isConnected) return;
   
-  // Initialize SMS service
-  smsService.initialize();
-  
-  // Initialize cron jobs
-  if (process.env.NODE_ENV === "production") {
-    initCronJobs();
-    console.log("⏰ Cron jobs initialized");
+  try {
+    const db = await mongoose.connect(process.env.MONGODB_URI, {
+      useNewUrlParser: true,
+      useUnifiedTopology: true,
+    });
+    isConnected = db.connections[0].readyState;
+    console.log("✅ MongoDB connected");
+    
+    // Initialize SMS service only once
+    smsService.initialize();
+    
+    // Initialize cron jobs only in production and not in serverless
+    if (process.env.NODE_ENV === "production" && !process.env.VERCEL) {
+      initCronJobs();
+      console.log("⏰ Cron jobs initialized");
+    }
+  } catch (error) {
+    console.error("❌ MongoDB connection error:", error);
   }
-});
+};
 
-// Handle unhandled promise rejections
-process.on("unhandledRejection", (err) => {
-  console.error("❌ UNHANDLED REJECTION! Shutting down...");
-  console.error(err.name, err.message);
-  console.error(err.stack);
-  server.close(() => {
-    process.exit(1);
+// For local development
+if (process.env.NODE_ENV !== "production") {
+  const PORT = process.env.PORT || 5000;
+  
+  const server = app.listen(PORT, async () => {
+    await connectDB();
+    console.log(`
+    ======================================
+    🚀 Server is running on port ${PORT}
+    📝 Environment: ${process.env.NODE_ENV || "development"}
+    🔗 URL: http://localhost:${PORT}
+    ======================================
+    `);
   });
-});
 
-// Graceful shutdown for SIGTERM
-process.on("SIGTERM", () => {
-  console.log("👋 SIGTERM RECEIVED. Shutting down gracefully");
-  server.close(() => {
-    console.log("💤 Process terminated!");
+  // Handle unhandled promise rejections
+  process.on("unhandledRejection", (err) => {
+    console.error("❌ UNHANDLED REJECTION! Shutting down...");
+    console.error(err.name, err.message);
+    console.error(err.stack);
+    server.close(() => {
+      process.exit(1);
+    });
   });
-});
+
+  // Graceful shutdown for SIGTERM
+  process.on("SIGTERM", () => {
+    console.log("👋 SIGTERM RECEIVED. Shutting down gracefully");
+    server.close(() => {
+      console.log("💤 Process terminated!");
+    });
+  });
+}
+
+// For Vercel serverless deployment
+module.exports = async (req, res) => {
+  await connectDB();
+  return app(req, res);
+};
