@@ -1,0 +1,567 @@
+'use client'
+
+import { useState, useEffect } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
+import Link from 'next/link'
+import api from '@/lib/api'
+import {
+  ArrowLeftIcon,
+  UserIcon,
+  DocumentTextIcon,
+  CurrencyDollarIcon,
+  CalendarIcon,
+  BanknotesIcon,
+  BuildingLibraryIcon,
+  CreditCardIcon,
+  ArrowTrendingDownIcon,
+  ArrowTrendingUpIcon,
+  CheckCircleIcon,
+} from '@heroicons/react/24/outline'
+import toast from 'react-hot-toast'
+import Select from 'react-select'
+
+export default function NewLedgerEntryPage() {
+  const router = useRouter()
+  const searchParams = useSearchParams()
+  const customerId = searchParams.get('customer')
+
+  const [loading, setLoading] = useState(false)
+  const [customers, setCustomers] = useState([])
+  const [customersLoading, setCustomersLoading] = useState(true)
+  const [selectedCustomer, setSelectedCustomer] = useState(null)
+  const [customerBalance, setCustomerBalance] = useState(0)
+  const [formData, setFormData] = useState({
+    customer: customerId || '',
+    description: '',
+    debit: '',
+    credit: '',
+    reference: '',
+    dueDate: '',
+    entryType: 'purchase',
+    paymentMethod: 'cash',
+  })
+
+  useEffect(() => {
+    fetchCustomers()
+  }, [])
+
+  useEffect(() => {
+    if (customerId) {
+      // Find and set the selected customer from the customers list
+      const customer = customers.find(c => c._id === customerId)
+      if (customer) {
+        setSelectedCustomer(customer)
+        fetchCustomerBalance(customerId)
+      }
+      setFormData(prev => ({ ...prev, customer: customerId }))
+    }
+  }, [customerId, customers])
+
+  // 🔴 FIX: Properly handle all API response formats
+  const fetchCustomers = async () => {
+    try {
+      setCustomersLoading(true)
+      const response = await api.get('/customers?limit=1000')
+      
+      console.log('📦 Customers API Response:', response.data)
+      
+      // Handle multiple possible response structures
+      let customersList = []
+      
+      if (Array.isArray(response.data)) {
+        // Direct array response
+        customersList = response.data
+      } else if (response.data.customers && Array.isArray(response.data.customers)) {
+        // { customers: [...] } format
+        customersList = response.data.customers
+      } else if (response.data.data && Array.isArray(response.data.data)) {
+        // { data: [...] } format
+        customersList = response.data.data
+      } else if (response.data.data?.customers && Array.isArray(response.data.data.customers)) {
+        // { data: { customers: [...] } } format
+        customersList = response.data.data.customers
+      }
+      
+      console.log('📋 Processed customers list:', customersList.length)
+      setCustomers(customersList)
+      
+      if (customersList.length === 0) {
+        toast.error('No customers found. Please add customers first.')
+      }
+    } catch (error) {
+      console.error('❌ Error fetching customers:', error)
+      toast.error('Failed to load customers')
+    } finally {
+      setCustomersLoading(false)
+    }
+  }
+
+ const fetchCustomerBalance = async (id) => {
+  try {
+    // ✅ FIX: Use correct endpoint - no trailing slash issues
+    const response = await api.get(`/ledger/${id}/balance`)
+    
+    console.log('💰 Balance response:', response.data)
+    
+    // Handle multiple response formats
+    let balance = 0
+    if (response.data.data?.currentBalance !== undefined) {
+      balance = response.data.data.currentBalance
+    } else if (response.data.currentBalance !== undefined) {
+      balance = response.data.currentBalance
+    } else if (response.data.balance !== undefined) {
+      balance = response.data.balance
+    }
+    
+    setCustomerBalance(balance)
+  } catch (error) {
+    console.error('❌ Error fetching balance:', error)
+    // ✅ FIX: Show more detailed error
+    if (error.response?.status === 404) {
+      toast.error('Balance endpoint not found. Please check backend routes.')
+    } else {
+      toast.error('Failed to fetch customer balance')
+    }
+  }
+}
+  const handleCustomerChange = async (option) => {
+    if (!option) {
+      setSelectedCustomer(null)
+      setFormData(prev => ({ ...prev, customer: '' }))
+      setCustomerBalance(0)
+      return
+    }
+    
+    // Find the full customer object
+    const customer = customers.find(c => c._id === option.value)
+    setSelectedCustomer(customer)
+    setFormData(prev => ({ ...prev, customer: customer._id }))
+    
+    if (customer?._id) {
+      await fetchCustomerBalance(customer._id)
+    }
+  }
+
+  const handleSubmit = async (e) => {
+    e.preventDefault()
+    
+    // Validation
+    if (!formData.customer) {
+      toast.error('Please select a customer')
+      return
+    }
+
+    if (!formData.description) {
+      toast.error('Please enter a description')
+      return
+    }
+
+    const debit = parseFloat(formData.debit) || 0
+    const credit = parseFloat(formData.credit) || 0
+
+    if (debit <= 0 && credit <= 0) {
+      toast.error('Either debit or credit amount must be greater than zero')
+      return
+    }
+
+    if (debit > 0 && credit > 0) {
+      toast.error('Cannot have both debit and credit in the same entry')
+      return
+    }
+
+    setLoading(true)
+
+    try {
+      const response = await api.post('/ledger', {
+        ...formData,
+        debit,
+        credit,
+        dueDate: formData.dueDate || null,
+      })
+
+      toast.success('Ledger entry created successfully!')
+      router.push(`/admin/ledger?customer=${formData.customer}`)
+    } catch (error) {
+      console.error('❌ Error creating ledger entry:', error)
+      toast.error(error.response?.data?.message || 'Failed to create ledger entry')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // 🔴 FIX: Transform customers to react-select options with null checks
+  const customerOptions = customers?.filter(c => c && c._id && c.name)?.map(c => ({
+    value: c._id,
+    label: `${c.name} - ${c.phone || 'No phone'}`,
+    ...c
+  })) || []
+
+  // Find the currently selected option
+  const selectedOption = customerOptions.find(opt => opt.value === formData.customer)
+
+  const newBalance = customerBalance + (parseFloat(formData.debit) || 0) - (parseFloat(formData.credit) || 0)
+
+  return (
+    <div className="max-w-4xl mx-auto">
+      {/* Header */}
+      <div className="flex items-center gap-4 mb-8">
+        <Link
+          href="/admin/ledger"
+          className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-xl transition"
+        >
+          <ArrowLeftIcon className="w-5 h-5" />
+        </Link>
+        <div>
+          <h1 className="text-3xl font-bold text-gray-900">Add Ledger Entry</h1>
+          <p className="text-gray-600 mt-2">
+            Record a debit (purchase) or credit (payment) transaction
+          </p>
+        </div>
+      </div>
+
+      {/* Form */}
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
+        <form onSubmit={handleSubmit}>
+          {/* Customer Selection */}
+          <div className="p-8 border-b border-gray-200">
+            <h2 className="text-xl font-bold text-gray-900 mb-6 flex items-center gap-2">
+              <UserIcon className="w-5 h-5 text-gray-500" />
+              Customer Information
+            </h2>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Select Customer <span className="text-red-500">*</span>
+                </label>
+                {customersLoading ? (
+                  <div className="h-12 bg-gray-100 rounded-xl animate-pulse"></div>
+                ) : (
+                  <>
+                    <Select
+                      options={customerOptions}
+                      value={selectedOption}
+                      onChange={handleCustomerChange}
+                      className="react-select"
+                      classNamePrefix="select"
+                      placeholder={customerOptions.length === 0 ? "No customers found" : "Search by name or phone..."}
+                      isClearable
+                      isSearchable
+                      isDisabled={customerOptions.length === 0}
+                      noOptionsMessage={() => "No customers available"}
+                    />
+                    {customerOptions.length === 0 && !customersLoading && (
+                      <p className="text-xs text-red-500 mt-2">
+                        No customers found. Please add customers first.
+                      </p>
+                    )}
+                  </>
+                )}
+              </div>
+
+              {selectedCustomer && (
+                <div className="bg-blue-50 rounded-xl p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm text-blue-700">Current Balance</p>
+                      <p className={`text-2xl font-bold ${
+                        customerBalance > 0 ? 'text-yellow-600' : 'text-green-600'
+                      }`}>
+                        Rs. {customerBalance.toLocaleString()}
+                      </p>
+                    </div>
+                    {selectedCustomer.creditLimit > 0 && (
+                      <div className="text-right">
+                        <p className="text-sm text-blue-700">Credit Limit</p>
+                        <p className="text-xl font-bold text-blue-700">
+                          Rs. {selectedCustomer.creditLimit.toLocaleString()}
+                        </p>
+                        <p className="text-xs text-blue-600 mt-1">
+                          Available: Rs. {Math.max(0, selectedCustomer.creditLimit - customerBalance).toLocaleString()}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Transaction Details */}
+          <div className="p-8 border-b border-gray-200">
+            <h2 className="text-xl font-bold text-gray-900 mb-6 flex items-center gap-2">
+              <DocumentTextIcon className="w-5 h-5 text-gray-500" />
+              Transaction Details
+            </h2>
+
+            <div className="space-y-6">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Description <span className="text-red-500">*</span>
+                </label>
+                <textarea
+                  required
+                  rows="3"
+                  value={formData.description}
+                  onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition"
+                  placeholder="Enter detailed description of the transaction..."
+                />
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Debit Amount (Purchase)
+                  </label>
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 font-medium">
+                      Rs.
+                    </span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={formData.debit}
+                      onChange={(e) => setFormData({ 
+                        ...formData, 
+                        debit: e.target.value,
+                        credit: e.target.value ? '' : formData.credit
+                      })}
+                      className="w-full pl-12 pr-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition"
+                      placeholder="0.00"
+                    />
+                  </div>
+                  {formData.debit > 0 && (
+                    <p className="text-xs text-red-600 mt-2 flex items-center gap-1">
+                      <ArrowTrendingDownIcon className="w-3 h-3" />
+                      This will increase customer's balance
+                    </p>
+                  )}
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Credit Amount (Payment)
+                  </label>
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 font-medium">
+                      Rs.
+                    </span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={formData.credit}
+                      onChange={(e) => setFormData({ 
+                        ...formData, 
+                        credit: e.target.value,
+                        debit: e.target.value ? '' : formData.debit
+                      })}
+                      className="w-full pl-12 pr-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition"
+                      placeholder="0.00"
+                    />
+                  </div>
+                  {formData.credit > 0 && (
+                    <p className="text-xs text-green-600 mt-2 flex items-center gap-1">
+                      <ArrowTrendingUpIcon className="w-3 h-3" />
+                      This will decrease customer's balance
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Reference Number
+                  </label>
+                  <input
+                    type="text"
+                    value={formData.reference}
+                    onChange={(e) => setFormData({ ...formData, reference: e.target.value })}
+                    className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition"
+                    placeholder="Invoice #, Receipt #, etc."
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Due Date (Optional)
+                  </label>
+                  <div className="relative">
+                    <CalendarIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+                    <input
+                      type="date"
+                      value={formData.dueDate}
+                      onChange={(e) => setFormData({ ...formData, dueDate: e.target.value })}
+                      className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {formData.debit > 0 && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Payment Method
+                  </label>
+                  <div className="grid grid-cols-3 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setFormData({ ...formData, paymentMethod: 'cash' })}
+                      className={`
+                        flex flex-col items-center gap-2 p-4 border-2 rounded-xl transition
+                        ${formData.paymentMethod === 'cash'
+                          ? 'border-green-500 bg-green-50'
+                          : 'border-gray-200 hover:border-gray-300'
+                        }
+                      `}
+                    >
+                      <BanknotesIcon className={`w-6 h-6 ${
+                        formData.paymentMethod === 'cash' ? 'text-green-600' : 'text-gray-500'
+                      }`} />
+                      <span className={`text-sm font-medium ${
+                        formData.paymentMethod === 'cash' ? 'text-green-700' : 'text-gray-700'
+                      }`}>
+                        Cash
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setFormData({ ...formData, paymentMethod: 'bank' })}
+                      className={`
+                        flex flex-col items-center gap-2 p-4 border-2 rounded-xl transition
+                        ${formData.paymentMethod === 'bank'
+                          ? 'border-blue-500 bg-blue-50'
+                          : 'border-gray-200 hover:border-gray-300'
+                        }
+                      `}
+                    >
+                      <BuildingLibraryIcon className={`w-6 h-6 ${
+                        formData.paymentMethod === 'bank' ? 'text-blue-600' : 'text-gray-500'
+                      }`} />
+                      <span className={`text-sm font-medium ${
+                        formData.paymentMethod === 'bank' ? 'text-blue-700' : 'text-gray-700'
+                      }`}>
+                        Bank
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setFormData({ ...formData, paymentMethod: 'online' })}
+                      className={`
+                        flex flex-col items-center gap-2 p-4 border-2 rounded-xl transition
+                        ${formData.paymentMethod === 'online'
+                          ? 'border-purple-500 bg-purple-50'
+                          : 'border-gray-200 hover:border-gray-300'
+                        }
+                      `}
+                    >
+                      <CreditCardIcon className={`w-6 h-6 ${
+                        formData.paymentMethod === 'online' ? 'text-purple-600' : 'text-gray-500'
+                      }`} />
+                      <span className={`text-sm font-medium ${
+                        formData.paymentMethod === 'online' ? 'text-purple-700' : 'text-gray-700'
+                      }`}>
+                        Online
+                      </span>
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Preview */}
+          {selectedCustomer && (formData.debit > 0 || formData.credit > 0) && (
+            <div className="p-8 border-b border-gray-200 bg-gray-50">
+              <h2 className="text-xl font-bold text-gray-900 mb-6">Transaction Preview</h2>
+              
+              <div className="bg-white rounded-xl p-6 shadow-sm">
+                <div className="flex items-center justify-between mb-6">
+                  <div className="flex items-center gap-3">
+                    <div className="w-12 h-12 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-full flex items-center justify-center">
+                      <span className="text-white font-bold text-lg">
+                        {selectedCustomer.name?.charAt(0)}
+                      </span>
+                    </div>
+                    <div>
+                      <p className="font-bold text-gray-900">{selectedCustomer.name}</p>
+                      <p className="text-sm text-gray-600">{selectedCustomer.phone}</p>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-sm text-gray-600">Current Balance</p>
+                    <p className="text-2xl font-bold text-gray-900">
+                      Rs. {customerBalance.toLocaleString()}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="border-t border-gray-200 pt-4">
+                  <div className="flex justify-between items-center">
+                    <div>
+                      <p className="text-sm text-gray-600">Transaction</p>
+                      <p className="font-medium text-gray-900 mt-1">
+                        {formData.debit > 0 ? 'Debit (Purchase)' : 'Credit (Payment)'}
+                      </p>
+                      {formData.description && (
+                        <p className="text-sm text-gray-600 mt-2">{formData.description}</p>
+                      )}
+                    </div>
+                    <div className="text-right">
+                      <p className={`text-3xl font-bold ${
+                        formData.debit > 0 ? 'text-red-600' : 'text-green-600'
+                      }`}>
+                        {formData.debit > 0 ? '-' : '+'}
+                        Rs. {(parseFloat(formData.debit || formData.credit) || 0).toLocaleString()}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="border-t border-gray-200 mt-4 pt-4">
+                  <div className="flex justify-between items-center">
+                    <p className="font-medium text-gray-900">New Balance</p>
+                    <p className={`text-2xl font-bold ${
+                      newBalance > 0 ? 'text-yellow-600' : 'text-green-600'
+                    }`}>
+                      Rs. {newBalance.toLocaleString()}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Form Actions */}
+          <div className="p-8 bg-gray-50 flex items-center justify-end gap-4">
+            <Link
+              href="/admin/ledger"
+              className="px-6 py-3 border border-gray-300 text-gray-700 font-medium rounded-xl hover:bg-gray-100 transition"
+            >
+              Cancel
+            </Link>
+            <button
+              type="submit"
+              disabled={loading || !formData.customer || customersLoading}
+              className="px-8 py-3 bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-medium rounded-xl hover:from-blue-700 hover:to-indigo-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+            >
+              {loading ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  Creating...
+                </>
+              ) : (
+                'Create Entry'
+              )}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
